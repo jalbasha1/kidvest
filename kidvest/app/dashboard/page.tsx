@@ -6,12 +6,24 @@ import { createClient } from '@/lib/supabase'
 import {
   LayoutDashboard, Users, TrendingUp, LogOut, ChevronRight,
   Plus, Minus, Trash2, TrendingDown, Shuffle, PencilLine, Wallet,
+  Clock, ToggleLeft, ToggleRight, Save,
 } from 'lucide-react'
 
 const AVATAR_BG = ['#E1F5EE','#E6F1FB','#FAECE7','#F0E9FD','#FAEEDA','#FBEAF0','#EAF3DE']
 const AVATAR_FG = ['#0F6E56','#185FA5','#993C1D','#5B3EA6','#854F0B','#993556','#3B6D11']
 
 type Child = { id: string; name: string; balance: number; color: number; last_change?: number }
+
+type SimConfig = {
+  id?: string
+  enabled: boolean
+  mode: 'percent' | 'amount'
+  min_val: number
+  max_val: number
+  last_run_date: string | null
+}
+
+const DEFAULT_CONFIG: SimConfig = { enabled: false, mode: 'percent', min_val: -0.15, max_val: 0.15, last_run_date: null }
 
 function fmt(n: number) {
   return '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -51,6 +63,13 @@ export default function Dashboard() {
   const [simRunning, setSimRunning] = useState(false)
   const [activeTab, setActiveTab] = useState<Tab>('overview')
   const [userEmail, setUserEmail] = useState('')
+  const [parentId, setParentId] = useState('')
+
+  // Daily auto-update config
+  const [simConfig, setSimConfig] = useState<SimConfig>(DEFAULT_CONFIG)
+  const [configDraft, setConfigDraft] = useState<SimConfig>(DEFAULT_CONFIG)
+  const [configSaving, setConfigSaving] = useState(false)
+  const [configSaved, setConfigSaved] = useState(false)
 
   const supabase = createClient()
 
@@ -58,6 +77,26 @@ export default function Dashboard() {
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) { router.push('/login'); return }
     setUserEmail(session.user.email || '')
+    setParentId(session.user.id)
+
+    // Client-side daily sim catch-up — runs if today hasn't been processed yet
+    const today = new Date().toISOString().split('T')[0]
+    const { data: cfg } = await supabase
+      .from('sim_config').select('enabled, last_run_date')
+      .eq('parent_id', session.user.id).maybeSingle()
+    if (cfg?.enabled && cfg.last_run_date !== today) {
+      await supabase.rpc('run_daily_simulation_for_parent', { p_parent_id: session.user.id })
+    }
+
+    // Load full sim config for UI
+    const { data: fullCfg } = await supabase
+      .from('sim_config').select('*').eq('parent_id', session.user.id).maybeSingle()
+    if (fullCfg) {
+      setSimConfig(fullCfg)
+      setConfigDraft(fullCfg)
+    }
+
+    // Load children
     const { data } = await supabase
       .from('children').select('*').order('created_at', { ascending: true })
     if (data) {
@@ -101,7 +140,6 @@ export default function Dashboard() {
     }
 
     if (child) {
-      // If the DB defaulted balance to 0 (e.g. column-level restriction), force it now
       if (bal > 0 && child.balance !== bal) {
         await supabase.from('children').update({ balance: bal }).eq('id', child.id)
       }
@@ -177,6 +215,31 @@ export default function Dashboard() {
     loadChildren()
   }
 
+  async function saveSimConfig() {
+    if (!parentId) return
+    // Validate range
+    if (configDraft.min_val > configDraft.max_val) {
+      alert('Min value must be less than or equal to max value.')
+      return
+    }
+    setConfigSaving(true)
+    const payload = {
+      parent_id: parentId,
+      enabled: configDraft.enabled,
+      mode: configDraft.mode,
+      min_val: configDraft.min_val,
+      max_val: configDraft.max_val,
+    }
+    const { data } = await supabase
+      .from('sim_config')
+      .upsert(payload, { onConflict: 'parent_id' })
+      .select().maybeSingle()
+    if (data) { setSimConfig(data); setConfigDraft(data) }
+    setConfigSaving(false)
+    setConfigSaved(true)
+    setTimeout(() => setConfigSaved(false), 2500)
+  }
+
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50">
       <div className="flex flex-col items-center gap-3">
@@ -191,6 +254,7 @@ export default function Dashboard() {
   const totalPortfolio = children.reduce((s, c) => s + c.balance, 0)
   const totalChange = children.reduce((s, c) => s + (c.last_change || 0), 0)
   const selectedChild = children.find(c => c.id === txChild)
+  const isDirty = JSON.stringify(configDraft) !== JSON.stringify(simConfig)
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -206,8 +270,7 @@ export default function Dashboard() {
           <span className="text-xs text-slate-400 hidden sm:block truncate max-w-[200px]">{userEmail}</span>
           <button onClick={signOut}
             className="flex items-center gap-1.5 text-xs text-slate-500 border border-slate-200 rounded-lg px-3 py-1.5 hover:bg-slate-50 transition-colors">
-            <LogOut className="w-3 h-3" />
-            Sign out
+            <LogOut className="w-3 h-3" /> Sign out
           </button>
         </div>
       </nav>
@@ -218,12 +281,9 @@ export default function Dashboard() {
           {TABS.map(({ id, label, icon: Icon }) => (
             <button key={id} onClick={() => setActiveTab(id)}
               className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                activeTab === id
-                  ? 'bg-brand text-white shadow-sm'
-                  : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'
+                activeTab === id ? 'bg-brand text-white shadow-sm' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'
               }`}>
-              <Icon className="w-3.5 h-3.5" />
-              {label}
+              <Icon className="w-3.5 h-3.5" />{label}
             </button>
           ))}
         </div>
@@ -231,7 +291,6 @@ export default function Dashboard() {
         {/* ── OVERVIEW ── */}
         {activeTab === 'overview' && (
           <div className="space-y-5">
-            {/* Hero card */}
             <div className="rounded-2xl p-6 relative overflow-hidden"
               style={{ background: 'linear-gradient(135deg, #0F6E56 0%, #1D9E75 60%, #34c993 100%)' }}>
               <div className="absolute -top-10 -right-10 w-48 h-48 rounded-full bg-white/5 pointer-events-none" />
@@ -249,7 +308,6 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {/* Child cards */}
             {children.length === 0 ? (
               <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center shadow-card">
                 <div className="w-12 h-12 rounded-2xl bg-brand-light flex items-center justify-center mx-auto mb-3">
@@ -295,7 +353,6 @@ export default function Dashboard() {
         {/* ── MANAGE ── */}
         {activeTab === 'manage' && (
           <div className="space-y-4">
-            {/* Add child */}
             <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-card">
               <div className="flex items-center gap-2 mb-4">
                 <div className="w-7 h-7 rounded-lg bg-brand-light flex items-center justify-center">
@@ -316,7 +373,6 @@ export default function Dashboard() {
               </form>
             </div>
 
-            {/* Manage funds */}
             {children.length > 0 && (
               <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-card">
                 <div className="flex items-center gap-2 mb-4">
@@ -326,12 +382,10 @@ export default function Dashboard() {
                   <h2 className="text-sm font-semibold text-slate-800">Manage funds</h2>
                 </div>
                 <div className="flex flex-wrap gap-3 mb-4">
-                  <div className="relative">
-                    <select value={txChild} onChange={e => setTxChild(e.target.value)}
-                      className="h-10 pl-3.5 pr-8 rounded-xl border border-slate-200 text-sm bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand focus:border-transparent transition appearance-none">
-                      {children.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                    </select>
-                  </div>
+                  <select value={txChild} onChange={e => setTxChild(e.target.value)}
+                    className="h-10 pl-3.5 pr-8 rounded-xl border border-slate-200 text-sm bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand focus:border-transparent transition appearance-none">
+                    {children.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
                   <input value={txAmount} onChange={e => setTxAmount(e.target.value)} type="number" min="0.01" step="0.01" placeholder="Amount $"
                     className="w-36 h-10 px-3.5 rounded-xl border border-slate-200 text-sm bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand focus:border-transparent transition" />
                   <input value={txNote} onChange={e => setTxNote(e.target.value)} placeholder="Note (optional)"
@@ -356,7 +410,6 @@ export default function Dashboard() {
               </div>
             )}
 
-            {/* Children table */}
             <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-card">
               <div className="flex items-center gap-2 mb-4">
                 <div className="w-7 h-7 rounded-lg bg-slate-100 flex items-center justify-center">
@@ -364,7 +417,6 @@ export default function Dashboard() {
                 </div>
                 <h2 className="text-sm font-semibold text-slate-800">All accounts</h2>
               </div>
-
               {children.length === 0 ? (
                 <p className="text-sm text-slate-400 py-2">No children added yet.</p>
               ) : (
@@ -396,9 +448,7 @@ export default function Dashboard() {
                               <span className={`text-xs font-semibold ${child.last_change >= 0 ? 'text-brand' : 'text-red-500'}`}>
                                 {child.last_change >= 0 ? '+' : ''}{fmt(child.last_change)}
                               </span>
-                            ) : (
-                              <span className="text-xs text-slate-300">—</span>
-                            )}
+                            ) : <span className="text-xs text-slate-300">—</span>}
                           </td>
                           <td className="text-right py-3 px-1">
                             <button onClick={() => removeChild(child.id)}
@@ -419,21 +469,21 @@ export default function Dashboard() {
         {/* ── SIMULATE ── */}
         {activeTab === 'simulate' && (
           <div className="space-y-4">
+            {/* Manual simulator */}
             <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-card">
               <div className="flex items-center gap-2 mb-1">
                 <div className="w-7 h-7 rounded-lg bg-brand-light flex items-center justify-center">
                   <TrendingUp className="w-3.5 h-3.5 text-brand" />
                 </div>
-                <h2 className="text-sm font-semibold text-slate-800">Market simulator</h2>
+                <h2 className="text-sm font-semibold text-slate-800">Manual simulator</h2>
               </div>
-              <p className="text-xs text-slate-400 mb-5 ml-9">Simulate daily market movements across all accounts at once.</p>
+              <p className="text-xs text-slate-400 mb-5 ml-9">Jump ahead manually — simulate any number of market days at once.</p>
 
-              {/* Mode cards */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-5">
                 {SIM_MODES.map(({ value, icon: Icon, label, desc, color, bg }) => (
                   <button key={value} onClick={() => setSimMode(value)}
                     className={`rounded-xl p-3 text-left border-2 transition-all ${
-                      simMode === value ? 'border-current shadow-sm scale-[1.02]' : 'border-transparent hover:border-slate-200'
+                      simMode === value ? 'shadow-sm scale-[1.02]' : 'border-transparent hover:border-slate-200'
                     }`}
                     style={{ background: bg, borderColor: simMode === value ? color : undefined }}>
                     <Icon className="w-4 h-4 mb-1.5" style={{ color }} />
@@ -473,6 +523,104 @@ export default function Dashboard() {
                   <p className="text-xs font-medium text-brand-dark">{simMsg}</p>
                 </div>
               )}
+            </div>
+
+            {/* Daily auto-update */}
+            <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-card">
+              <div className="flex items-center justify-between mb-1">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-slate-100 flex items-center justify-center">
+                    <Clock className="w-3.5 h-3.5 text-slate-500" />
+                  </div>
+                  <h2 className="text-sm font-semibold text-slate-800">Daily auto-update</h2>
+                </div>
+                {/* Enabled toggle */}
+                <button onClick={() => setConfigDraft(d => ({ ...d, enabled: !d.enabled }))}
+                  className="flex items-center gap-1.5 text-sm font-semibold transition-colors"
+                  style={{ color: configDraft.enabled ? '#1D9E75' : '#94A3B8' }}>
+                  {configDraft.enabled
+                    ? <><ToggleRight className="w-6 h-6" /> On</>
+                    : <><ToggleLeft className="w-6 h-6" /> Off</>}
+                </button>
+              </div>
+              <p className="text-xs text-slate-400 mb-5 ml-9">
+                Every midnight UTC, a random amount is added or removed from each account within your set range.
+                When you open the app, any missed days catch up automatically.
+              </p>
+
+              {/* Mode selector */}
+              <div className="mb-4">
+                <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">Update type</p>
+                <div className="flex gap-2">
+                  {(['percent', 'amount'] as const).map(m => (
+                    <button key={m} onClick={() => setConfigDraft(d => ({
+                      ...d, mode: m,
+                      min_val: m === 'percent' ? -0.15 : -0.10,
+                      max_val: m === 'percent' ?  0.15 :  0.25,
+                    }))}
+                      className={`h-9 px-4 rounded-xl text-sm font-semibold border-2 transition-all ${
+                        configDraft.mode === m
+                          ? 'border-brand bg-brand-light text-brand-dark'
+                          : 'border-slate-200 text-slate-500 hover:border-slate-300'
+                      }`}>
+                      {m === 'percent' ? '% per day' : '$ per day'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Range inputs */}
+              <div className="mb-5">
+                <p className="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-2">Daily range</p>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs text-slate-500 w-6">Min</label>
+                    <input
+                      type="number" step="0.01"
+                      value={configDraft.min_val}
+                      onChange={e => setConfigDraft(d => ({ ...d, min_val: parseFloat(e.target.value) || 0 }))}
+                      className="w-24 h-9 px-3 rounded-xl border border-slate-200 text-sm bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand focus:border-transparent transition"
+                    />
+                    <span className="text-xs text-slate-400">{configDraft.mode === 'percent' ? '%' : '$'}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs text-slate-500 w-6">Max</label>
+                    <input
+                      type="number" step="0.01"
+                      value={configDraft.max_val}
+                      onChange={e => setConfigDraft(d => ({ ...d, max_val: parseFloat(e.target.value) || 0 }))}
+                      className="w-24 h-9 px-3 rounded-xl border border-slate-200 text-sm bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand focus:border-transparent transition"
+                    />
+                    <span className="text-xs text-slate-400">{configDraft.mode === 'percent' ? '%' : '$'}</span>
+                  </div>
+                </div>
+                <p className="text-xs text-slate-400 mt-2">
+                  {configDraft.mode === 'percent'
+                    ? `Each day randomly picks a % between ${configDraft.min_val}% and ${configDraft.max_val}% and applies it to every balance.`
+                    : `Each day randomly picks an amount between ${configDraft.min_val < 0 ? '-' : ''}$${Math.abs(configDraft.min_val)} and $${configDraft.max_val} and adds it to every balance.`}
+                </p>
+              </div>
+
+              {/* Last ran + save */}
+              <div className="flex items-center justify-between flex-wrap gap-3">
+                <p className="text-xs text-slate-400">
+                  {simConfig.last_run_date
+                    ? <>Last ran: <span className="font-medium text-slate-600">{new Date(simConfig.last_run_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span></>
+                    : 'Never run yet'}
+                </p>
+                <button onClick={saveSimConfig} disabled={configSaving || !isDirty}
+                  className={`flex items-center gap-1.5 h-9 px-4 rounded-xl text-sm font-semibold transition-all ${
+                    configSaved
+                      ? 'bg-brand-light text-brand border border-brand/20'
+                      : isDirty
+                        ? 'text-white hover:opacity-90 active:scale-[0.98]'
+                        : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                  }`}
+                  style={isDirty && !configSaved ? { background: 'linear-gradient(135deg, #1D9E75, #0F6E56)' } : {}}>
+                  <Save className="w-3.5 h-3.5" />
+                  {configSaving ? 'Saving…' : configSaved ? 'Saved!' : 'Save settings'}
+                </button>
+              </div>
             </div>
 
             {/* Post-sim balances */}
