@@ -88,14 +88,29 @@ export default function Dashboard() {
     const colorIdx = children.length % 7
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) return
-    const { data: child } = await supabase
+
+    const { data: child, error: insertError } = await supabase
       .from('children')
       .insert({ name: newName.trim(), balance: bal, color: colorIdx, parent_id: session.user.id })
       .select().single()
-    if (child) {
-      await supabase.from('balance_history').insert({ child_id: child.id, balance: bal })
-      await supabase.from('transactions').insert({ child_id: child.id, type: 'deposit', amount: bal, note: 'Starting balance' })
+
+    if (insertError) {
+      console.error('addChild insert error:', insertError)
+      alert(`Could not add child: ${insertError.message}`)
+      return
     }
+
+    if (child) {
+      // If the DB defaulted balance to 0 (e.g. column-level restriction), force it now
+      if (bal > 0 && child.balance !== bal) {
+        await supabase.from('children').update({ balance: bal }).eq('id', child.id)
+      }
+      if (bal > 0) {
+        await supabase.from('balance_history').insert({ child_id: child.id, balance: bal })
+        await supabase.from('transactions').insert({ child_id: child.id, type: 'deposit', amount: bal, note: 'Starting balance' })
+      }
+    }
+
     setNewName(''); setNewBalance('')
     loadChildren()
   }
