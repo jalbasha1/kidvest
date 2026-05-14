@@ -4,7 +4,7 @@ import { useParams } from 'next/navigation'
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from 'recharts'
-import { TrendingUp, TrendingDown, Minus, Star, Sparkles, ArrowUpRight } from 'lucide-react'
+import { TrendingUp, TrendingDown, Minus, Star, Sparkles, ArrowUpRight, Target } from 'lucide-react'
 
 const AVATAR_BG = ['#E1F5EE','#E6F1FB','#FAECE7','#F0E9FD','#FAEEDA','#FBEAF0','#EAF3DE']
 const AVATAR_FG = ['#0F6E56','#185FA5','#993C1D','#5B3EA6','#854F0B','#993556','#3B6D11']
@@ -14,6 +14,7 @@ const GRAD_END  = ['#34c993','#5ba3e8','#e87a55','#a78bfa','#f0a832','#e07fa0','
 type Child = { id: string; name: string; balance: number; color: number }
 type Transaction = { id: string; type: string; amount: number; note: string; created_at: string }
 type HistoryPoint = { balance: number; recorded_at: string }
+type Goal = { id: string; name: string; target_amount: number }
 
 function fmt(n: number) {
   return '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -58,6 +59,7 @@ export default function KidView() {
   const [child, setChild] = useState<Child | null>(null)
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [history, setHistory] = useState<HistoryPoint[]>([])
+  const [goals, setGoals] = useState<Goal[]>([])
   const [loading, setLoading] = useState(true)
   const [notFound, setNotFound] = useState(false)
 
@@ -65,10 +67,11 @@ export default function KidView() {
     if (!token) return
     fetch(`/api/kid?token=${token}`)
       .then(r => r.ok ? r.json() : Promise.reject())
-      .then(({ child, transactions, history }) => {
+      .then(({ child, transactions, history, goals }) => {
         setChild(child)
         setTransactions(transactions)
         setHistory(history)
+        setGoals(goals || [])
         setLoading(false)
       })
       .catch(() => { setNotFound(true); setLoading(false) })
@@ -181,6 +184,54 @@ export default function KidView() {
             <p className="text-2xl font-black text-slate-800">{transactions.length}</p>
           </div>
         </div>
+
+        {/* Savings Goals */}
+        {goals.length > 0 && (
+          <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm">
+            <div className="flex items-center gap-2 mb-4">
+              <div className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0"
+                style={{ background: `${accent}20` }}>
+                <Target className="w-4 h-4" style={{ color: accent }} />
+              </div>
+              <p className="text-sm font-bold text-slate-800">My savings goals</p>
+            </div>
+            <div className="space-y-4">
+              {goals.map(goal => {
+                const pct = Math.min(100, (child.balance / goal.target_amount) * 100)
+                const reached = child.balance >= goal.target_amount
+                const remaining = Math.max(0, goal.target_amount - child.balance)
+                return (
+                  <div key={goal.id}>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-sm font-semibold text-slate-800">{goal.name}</span>
+                        {reached && <span className="text-xs">🎉</span>}
+                      </div>
+                      <span className="text-xs font-semibold" style={{ color: reached ? accent : '#64748B' }}>
+                        {reached ? 'Goal reached!' : `${fmt(remaining)} to go`}
+                      </span>
+                    </div>
+                    <div className="h-3 bg-slate-100 rounded-full overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-all duration-500"
+                        style={{
+                          width: `${pct}%`,
+                          background: reached
+                            ? `linear-gradient(90deg, ${accent}, ${gradEnd})`
+                            : `linear-gradient(90deg, ${accent}99, ${accent})`,
+                        }}
+                      />
+                    </div>
+                    <div className="flex justify-between mt-1">
+                      <span className="text-[10px] text-slate-400">{fmt(Math.min(child.balance, goal.target_amount))} saved</span>
+                      <span className="text-[10px] text-slate-400">Goal: {fmt(goal.target_amount)}</span>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Chart */}
         {chartData.length > 1 && (

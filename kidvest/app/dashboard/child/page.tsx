@@ -6,7 +6,7 @@ import { createClient } from '@/lib/supabase'
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from 'recharts'
-import { ArrowLeft, TrendingUp, TrendingDown, Minus, Wallet, BarChart2 } from 'lucide-react'
+import { ArrowLeft, TrendingUp, TrendingDown, Minus, Wallet, BarChart2, Target, Plus, Trash2 } from 'lucide-react'
 
 const AVATAR_BG = ['#E1F5EE','#E6F1FB','#FAECE7','#F0E9FD','#FAEEDA','#FBEAF0','#EAF3DE']
 const AVATAR_FG = ['#0F6E56','#185FA5','#993C1D','#5B3EA6','#854F0B','#993556','#3B6D11']
@@ -15,6 +15,7 @@ const COLORS    = ['#1D9E75','#378ADD','#D85A30','#8B5CF6','#E5850A','#D4537E','
 type Child = { id: string; name: string; balance: number; color: number }
 type Transaction = { id: string; type: string; amount: number; note: string; created_at: string }
 type HistoryPoint = { balance: number; recorded_at: string }
+type Goal = { id: string; name: string; target_amount: number }
 
 function fmt(n: number) {
   return '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -51,6 +52,10 @@ function ChildDashboardInner() {
   const [child, setChild] = useState<Child | null>(null)
   const [transactions, setTransactions] = useState<Transaction[]>([])
   const [history, setHistory] = useState<HistoryPoint[]>([])
+  const [goals, setGoals] = useState<Goal[]>([])
+  const [newGoalName, setNewGoalName] = useState('')
+  const [newGoalTarget, setNewGoalTarget] = useState('')
+  const [addingGoal, setAddingGoal] = useState(false)
   const [loading, setLoading] = useState(true)
 
   const supabase = createClient()
@@ -70,10 +75,31 @@ function ChildDashboardInner() {
       .from('balance_history').select('*').eq('child_id', childId)
       .order('recorded_at', { ascending: true })
     setHistory(histData || [])
+    const { data: goalsData } = await supabase
+      .from('goals').select('id, name, target_amount').eq('child_id', childId)
+      .order('created_at', { ascending: true })
+    setGoals(goalsData || [])
     setLoading(false)
   }, [childId, router])
 
   useEffect(() => { load() }, [load])
+
+  async function addGoal(e: React.FormEvent) {
+    e.preventDefault()
+    if (!newGoalName.trim() || !child) return
+    const target = parseFloat(newGoalTarget)
+    if (!target || target <= 0) return
+    setAddingGoal(true)
+    await supabase.from('goals').insert({ child_id: child.id, name: newGoalName.trim(), target_amount: target })
+    setNewGoalName(''); setNewGoalTarget('')
+    setAddingGoal(false)
+    load()
+  }
+
+  async function removeGoal(goalId: string) {
+    await supabase.from('goals').delete().eq('id', goalId)
+    load()
+  }
 
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50">
@@ -161,6 +187,79 @@ function ChildDashboardInner() {
             </div>
             <p className="text-xl font-bold text-slate-800">{transactions.length}</p>
           </div>
+        </div>
+
+        {/* Savings Goals */}
+        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-card">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: `${accentColor}20` }}>
+                <Target className="w-3.5 h-3.5" style={{ color: accentColor }} />
+              </div>
+              <h2 className="text-sm font-semibold text-slate-800">Savings goals</h2>
+            </div>
+          </div>
+
+          {/* Existing goals */}
+          {goals.length > 0 && (
+            <div className="space-y-4 mb-5">
+              {goals.map(goal => {
+                const pct = Math.min(100, (child.balance / goal.target_amount) * 100)
+                const reached = child.balance >= goal.target_amount
+                const remaining = Math.max(0, goal.target_amount - child.balance)
+                return (
+                  <div key={goal.id}>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-sm font-medium text-slate-700">{goal.name}</span>
+                        {reached && <span className="text-xs bg-brand-light text-brand font-semibold px-2 py-0.5 rounded-full">Reached! 🎉</span>}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-slate-400">
+                          {reached ? fmt(goal.target_amount) : `${fmt(Math.min(child.balance, goal.target_amount))} / ${fmt(goal.target_amount)}`}
+                        </span>
+                        <button onClick={() => removeGoal(goal.id)}
+                          className="text-slate-300 hover:text-red-400 transition-colors">
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                    <div className="h-2.5 bg-slate-100 rounded-full overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-all duration-500"
+                        style={{
+                          width: `${pct}%`,
+                          background: reached
+                            ? `linear-gradient(90deg, #0F6E56, ${accentColor})`
+                            : `linear-gradient(90deg, ${accentColor}80, ${accentColor})`,
+                        }}
+                      />
+                    </div>
+                    {!reached && (
+                      <p className="text-xs text-slate-400 mt-1">{fmt(remaining)} remaining</p>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          {/* Add goal form */}
+          <form onSubmit={addGoal} className="flex flex-wrap gap-2 pt-3 border-t border-slate-100">
+            <input value={newGoalName} onChange={e => setNewGoalName(e.target.value)}
+              placeholder="Goal name (e.g. New bike)"
+              className="flex-1 min-w-32 h-9 px-3 rounded-xl border border-slate-200 text-sm bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:border-transparent transition"
+              style={{ ['--tw-ring-color' as string]: accentColor }} />
+            <input value={newGoalTarget} onChange={e => setNewGoalTarget(e.target.value)}
+              type="number" min="1" step="1" placeholder="Target $"
+              className="w-28 h-9 px-3 rounded-xl border border-slate-200 text-sm bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:border-transparent transition"
+              style={{ ['--tw-ring-color' as string]: accentColor }} />
+            <button type="submit" disabled={addingGoal}
+              className="h-9 px-4 rounded-xl text-white text-sm font-semibold flex items-center gap-1.5 hover:opacity-90 active:scale-[0.98] disabled:opacity-50 transition-all"
+              style={{ background: `linear-gradient(135deg, ${accentColor}, ${AVATAR_FG[child.color % 7]})` }}>
+              <Plus className="w-3.5 h-3.5" />{addingGoal ? 'Adding…' : 'Add goal'}
+            </button>
+          </form>
         </div>
 
         {/* Chart */}

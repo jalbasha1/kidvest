@@ -21,7 +21,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 })
   }
 
-  const [{ data: transactions }, { data: history }] = await Promise.all([
+  const [{ data: transactions }, { data: history }, { data: goals }] = await Promise.all([
     supabase
       .from('transactions')
       .select('id, type, amount, note, created_at')
@@ -33,7 +33,17 @@ export async function GET(request: Request) {
       .select('balance, recorded_at')
       .eq('child_id', child.id)
       .order('recorded_at', { ascending: true }),
+    supabase
+      .from('goals')
+      .select('id, name, target_amount')
+      .eq('child_id', child.id)
+      .order('created_at', { ascending: true }),
   ])
 
-  return NextResponse.json({ child, transactions: transactions || [], history: history || [] })
+  return NextResponse.json({
+    child,
+    transactions: transactions || [],
+    history: history || [],
+    goals: goals || [],
+  })
 }
