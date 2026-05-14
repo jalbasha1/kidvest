@@ -6,13 +6,17 @@ import { createClient } from '@/lib/supabase'
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from 'recharts'
-import { ArrowLeft, TrendingUp, TrendingDown, Minus, Wallet, BarChart2, Target, Plus, Trash2 } from 'lucide-react'
+import { ArrowLeft, TrendingUp, TrendingDown, Minus, Wallet, BarChart2, Target, Plus, Trash2, ToggleLeft, ToggleRight, Save, Settings2 } from 'lucide-react'
 
 const AVATAR_BG = ['#E1F5EE','#E6F1FB','#FAECE7','#F0E9FD','#FAEEDA','#FBEAF0','#EAF3DE']
 const AVATAR_FG = ['#0F6E56','#185FA5','#993C1D','#5B3EA6','#854F0B','#993556','#3B6D11']
 const COLORS    = ['#1D9E75','#378ADD','#D85A30','#8B5CF6','#E5850A','#D4537E','#639922']
 
-type Child = { id: string; name: string; balance: number; color: number }
+type Child = {
+  id: string; name: string; balance: number; color: number
+  sim_enabled: boolean; sim_mode: 'percent' | 'amount'; sim_min_val: number; sim_max_val: number
+}
+type SimDraft = { sim_enabled: boolean; sim_mode: 'percent' | 'amount'; sim_min_val: number; sim_max_val: number }
 type Transaction = { id: string; type: string; amount: number; note: string; created_at: string }
 type HistoryPoint = { balance: number; recorded_at: string }
 type Goal = { id: string; name: string; target_amount: number }
@@ -56,6 +60,9 @@ function ChildDashboardInner() {
   const [newGoalName, setNewGoalName] = useState('')
   const [newGoalTarget, setNewGoalTarget] = useState('')
   const [addingGoal, setAddingGoal] = useState(false)
+  const [simDraft, setSimDraft] = useState<SimDraft>({ sim_enabled: true, sim_mode: 'percent', sim_min_val: -0.15, sim_max_val: 0.15 })
+  const [simSaving, setSimSaving] = useState(false)
+  const [simSaved, setSimSaved] = useState(false)
   const [loading, setLoading] = useState(true)
 
   const supabase = createClient()
@@ -67,6 +74,12 @@ function ChildDashboardInner() {
     const { data: childData } = await supabase.from('children').select('*').eq('id', childId).single()
     if (!childData) { router.push('/dashboard'); return }
     setChild(childData)
+    setSimDraft({
+      sim_enabled: childData.sim_enabled ?? true,
+      sim_mode:    childData.sim_mode    ?? 'percent',
+      sim_min_val: childData.sim_min_val ?? -0.15,
+      sim_max_val: childData.sim_max_val ?? 0.15,
+    })
     const { data: txData } = await supabase
       .from('transactions').select('*').eq('child_id', childId)
       .order('created_at', { ascending: false }).limit(50)
@@ -99,6 +112,21 @@ function ChildDashboardInner() {
   async function removeGoal(goalId: string) {
     await supabase.from('goals').delete().eq('id', goalId)
     load()
+  }
+
+  async function saveSimSettings() {
+    if (!child) return
+    if (simDraft.sim_min_val > simDraft.sim_max_val) { alert('Min must be ≤ Max.'); return }
+    setSimSaving(true)
+    await supabase.from('children').update({
+      sim_enabled: simDraft.sim_enabled,
+      sim_mode:    simDraft.sim_mode,
+      sim_min_val: simDraft.sim_min_val,
+      sim_max_val: simDraft.sim_max_val,
+    }).eq('id', child.id)
+    setSimSaving(false)
+    setSimSaved(true)
+    setTimeout(() => setSimSaved(false), 2000)
   }
 
   if (loading) return (
@@ -330,6 +358,99 @@ function ChildDashboardInner() {
             </div>
           )}
         </div>
+
+        {/* Auto-update settings */}
+        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-card">
+          <div className="flex items-center gap-2 mb-4">
+            <div className="w-7 h-7 rounded-lg bg-slate-100 flex items-center justify-center">
+              <Settings2 className="w-3.5 h-3.5 text-slate-500" />
+            </div>
+            <h2 className="text-sm font-semibold text-slate-800">Auto-update settings</h2>
+            <span className="ml-auto text-xs text-slate-400">Daily market simulation</span>
+          </div>
+
+          <div className="space-y-4">
+            {/* Enable toggle */}
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-slate-700">Daily auto-update</p>
+                <p className="text-xs text-slate-400 mt-0.5">Apply a random market move each midnight</p>
+              </div>
+              <button
+                onClick={() => setSimDraft(d => ({ ...d, sim_enabled: !d.sim_enabled }))}
+                className="flex items-center gap-1.5 text-sm font-semibold transition-colors"
+                style={{ color: simDraft.sim_enabled ? accentColor : '#94A3B8' }}>
+                {simDraft.sim_enabled ? <ToggleRight className="w-7 h-7" /> : <ToggleLeft className="w-7 h-7" />}
+                <span className="text-xs">{simDraft.sim_enabled ? 'Active' : 'Paused'}</span>
+              </button>
+            </div>
+
+            {simDraft.sim_enabled && (
+              <>
+                {/* Mode */}
+                <div>
+                  <p className="text-xs font-medium text-slate-500 mb-2">Change mode</p>
+                  <div className="flex gap-2">
+                    {(['percent', 'amount'] as const).map(m => (
+                      <button key={m}
+                        onClick={() => setSimDraft(d => ({
+                          ...d, sim_mode: m,
+                          sim_min_val: m === 'percent' ? -0.15 : -0.10,
+                          sim_max_val: m === 'percent' ?  0.15 :  0.25,
+                        }))}
+                        className={`h-8 px-3 rounded-lg text-xs font-semibold border-2 transition-all ${
+                          simDraft.sim_mode === m ? 'border-current' : 'border-transparent bg-slate-100 text-slate-500 hover:border-slate-200'
+                        }`}
+                        style={simDraft.sim_mode === m ? { borderColor: accentColor, color: accentColor, background: AVATAR_BG[child.color % 7] } : {}}>
+                        {m === 'percent' ? '% / day' : '$ / day'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Range */}
+                <div>
+                  <p className="text-xs font-medium text-slate-500 mb-2">Daily range</p>
+                  <div className="flex items-center gap-4 flex-wrap">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-slate-400 w-6">Min</span>
+                      <input type="number" step="0.01" value={simDraft.sim_min_val}
+                        onChange={e => setSimDraft(d => ({ ...d, sim_min_val: parseFloat(e.target.value) || 0 }))}
+                        className="w-20 h-8 px-2.5 rounded-lg border border-slate-200 text-sm bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand focus:border-transparent transition" />
+                      <span className="text-xs text-slate-400">{simDraft.sim_mode === 'percent' ? '%' : '$'}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-slate-400 w-6">Max</span>
+                      <input type="number" step="0.01" value={simDraft.sim_max_val}
+                        onChange={e => setSimDraft(d => ({ ...d, sim_max_val: parseFloat(e.target.value) || 0 }))}
+                        className="w-20 h-8 px-2.5 rounded-lg border border-slate-200 text-sm bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand focus:border-transparent transition" />
+                      <span className="text-xs text-slate-400">{simDraft.sim_mode === 'percent' ? '%' : '$'}</span>
+                    </div>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-2">
+                    {simDraft.sim_mode === 'percent'
+                      ? `Picks randomly between ${simDraft.sim_min_val}% and ${simDraft.sim_max_val}% each day`
+                      : `Picks randomly between ${simDraft.sim_min_val < 0 ? '-' : ''}$${Math.abs(simDraft.sim_min_val).toFixed(2)} and $${simDraft.sim_max_val.toFixed(2)} each day`}
+                  </p>
+                </div>
+              </>
+            )}
+
+            <div className="flex justify-end pt-1">
+              <button onClick={saveSimSettings} disabled={simSaving}
+                className={`flex items-center gap-1.5 h-8 px-4 rounded-lg text-xs font-semibold transition-all ${
+                  simSaved
+                    ? 'bg-brand-light text-brand border border-brand/20'
+                    : 'text-white hover:opacity-90 active:scale-[0.98] disabled:opacity-50'
+                }`}
+                style={!simSaved ? { background: `linear-gradient(135deg, ${accentColor}, ${AVATAR_FG[child.color % 7]})` } : {}}>
+                <Save className="w-3 h-3" />
+                {simSaving ? 'Saving…' : simSaved ? 'Saved!' : 'Save settings'}
+              </button>
+            </div>
+          </div>
+        </div>
+
       </div>
     </div>
   )
