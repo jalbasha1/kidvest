@@ -6,7 +6,7 @@ import { createClient } from '@/lib/supabase'
 import {
   LayoutDashboard, Users, TrendingUp, LogOut, ChevronRight,
   Plus, Minus, Trash2, TrendingDown, Shuffle, PencilLine, Wallet,
-  Clock, ToggleLeft, ToggleRight, Save,
+  Clock, ToggleLeft, ToggleRight, Save, Share2, Check,
 } from 'lucide-react'
 
 const AVATAR_BG = ['#E1F5EE','#E6F1FB','#FAECE7','#F0E9FD','#FAEEDA','#FBEAF0','#EAF3DE']
@@ -16,6 +16,7 @@ const COLORS    = ['#1D9E75','#378ADD','#D85A30','#8B5CF6','#E5850A','#D4537E','
 type Child = {
   id: string; name: string; balance: number; color: number; last_change?: number
   sim_enabled: boolean; sim_mode: 'percent' | 'amount'; sim_min_val: number; sim_max_val: number
+  view_token?: string
 }
 
 type ChildSimDraft = { sim_enabled: boolean; sim_mode: 'percent' | 'amount'; sim_min_val: number; sim_max_val: number }
@@ -75,6 +76,7 @@ export default function Dashboard() {
   const [simDrafts, setSimDrafts] = useState<Record<string, ChildSimDraft>>({})
   const [savingChild, setSavingChild] = useState<string | null>(null)
   const [savedChild, setSavedChild] = useState<string | null>(null)
+  const [copiedChild, setCopiedChild] = useState<string | null>(null)
 
   const supabase = createClient()
 
@@ -253,6 +255,15 @@ export default function Dashboard() {
     setSimDrafts(prev => ({ ...prev, [childId]: { ...prev[childId], ...patch } }))
   }
 
+  function copyKidLink(child: Child) {
+    if (!child.view_token) return
+    const url = `${window.location.origin}/kid/${child.view_token}`
+    navigator.clipboard.writeText(url).then(() => {
+      setCopiedChild(child.id)
+      setTimeout(() => setCopiedChild(null), 2000)
+    })
+  }
+
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50">
       <div className="flex flex-col items-center gap-3">
@@ -335,15 +346,14 @@ export default function Dashboard() {
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {children.map(child => (
-                  <Link key={child.id} href={`/dashboard/child?id=${child.id}`}
-                    className="group bg-white rounded-2xl border border-slate-200 p-5 hover:border-brand/40 hover:shadow-card-md transition-all shadow-card block">
+                  <div key={child.id} className="group bg-white rounded-2xl border border-slate-200 p-5 hover:border-brand/40 hover:shadow-card-md transition-all shadow-card">
                     <div className="flex items-center justify-between mb-4">
-                      <div className="flex items-center gap-3">
+                      <Link href={`/dashboard/child?id=${child.id}`} className="flex items-center gap-3 flex-1 min-w-0">
                         <div className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0 ring-2 ring-white shadow-sm"
                           style={{ background: AVATAR_BG[child.color % 7], color: AVATAR_FG[child.color % 7] }}>
                           {initials(child.name)}
                         </div>
-                        <div>
+                        <div className="min-w-0">
                           <p className="font-semibold text-slate-800 text-sm">{child.name}</p>
                           {child.last_change !== undefined && child.last_change !== 0 && (
                             <p className={`text-xs font-medium ${child.last_change >= 0 ? 'text-brand' : 'text-red-500'}`}>
@@ -351,11 +361,28 @@ export default function Dashboard() {
                             </p>
                           )}
                         </div>
+                      </Link>
+                      <div className="flex items-center gap-1.5">
+                        {child.view_token && (
+                          <button onClick={e => { e.preventDefault(); copyKidLink(child) }}
+                            title="Copy kid-view link"
+                            className={`flex items-center gap-1 h-7 px-2 rounded-lg text-xs font-medium border transition-all ${
+                              copiedChild === child.id
+                                ? 'border-brand/30 bg-brand-light text-brand'
+                                : 'border-slate-200 text-slate-400 hover:text-brand hover:border-brand/30 hover:bg-brand-light'
+                            }`}>
+                            {copiedChild === child.id ? <><Check className="w-3 h-3" /> Copied!</> : <><Share2 className="w-3 h-3" /> Share</>}
+                          </button>
+                        )}
+                        <Link href={`/dashboard/child?id=${child.id}`}>
+                          <ChevronRight className="w-4 h-4 text-slate-300 group-hover:text-brand transition-colors" />
+                        </Link>
                       </div>
-                      <ChevronRight className="w-4 h-4 text-slate-300 group-hover:text-brand transition-colors" />
                     </div>
-                    <p className="text-2xl font-bold text-slate-900">{fmt(child.balance)}</p>
-                  </Link>
+                    <Link href={`/dashboard/child?id=${child.id}`}>
+                      <p className="text-2xl font-bold text-slate-900">{fmt(child.balance)}</p>
+                    </Link>
+                  </div>
                 ))}
               </div>
             )}
@@ -439,6 +466,7 @@ export default function Dashboard() {
                         <th className="text-left text-xs font-semibold text-slate-400 uppercase tracking-wide pb-3 px-1">Child</th>
                         <th className="text-right text-xs font-semibold text-slate-400 uppercase tracking-wide pb-3 px-1">Balance</th>
                         <th className="text-right text-xs font-semibold text-slate-400 uppercase tracking-wide pb-3 px-1">Last move</th>
+                        <th className="text-right text-xs font-semibold text-slate-400 uppercase tracking-wide pb-3 px-1">Kid link</th>
                         <th className="text-right text-xs font-semibold text-slate-400 uppercase tracking-wide pb-3 px-1">Action</th>
                       </tr>
                     </thead>
@@ -461,6 +489,16 @@ export default function Dashboard() {
                                 {child.last_change >= 0 ? '+' : ''}{fmt(child.last_change)}
                               </span>
                             ) : <span className="text-xs text-slate-300">—</span>}
+                          </td>
+                          <td className="text-right py-3 px-1">
+                            {child.view_token && (
+                              <button onClick={() => copyKidLink(child)}
+                                className={`inline-flex items-center gap-1 text-xs font-medium transition-colors ${
+                                  copiedChild === child.id ? 'text-brand' : 'text-slate-400 hover:text-brand'
+                                }`}>
+                                {copiedChild === child.id ? <><Check className="w-3 h-3" /> Copied!</> : <><Share2 className="w-3 h-3" /> Copy link</>}
+                              </button>
+                            )}
                           </td>
                           <td className="text-right py-3 px-1">
                             <button onClick={() => removeChild(child.id)}
